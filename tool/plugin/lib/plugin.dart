@@ -55,15 +55,6 @@ List<BuildSpec> createBuildSpecs(ProductCommand command) {
   return specs;
 }
 
-Future<int> deleteBuildContents() async {
-  final dir = Directory(p.join(rootPath, 'build'));
-  if (!dir.existsSync()) throw 'No build directory found';
-  var args = <String>[];
-  args.add('-rf');
-  args.add(p.join(rootPath, 'build', '*'));
-  return await exec('rm', args);
-}
-
 List<File> findJars(String path) {
   final dir = Directory(path);
   return dir
@@ -106,7 +97,8 @@ Future<File> genPluginXml(BuildSpec spec, String destDir, String path) async {
   return await dest.done;
 }
 
-void genPresubmitYaml(List<BuildSpec> specs) {
+bool genPresubmitYaml(List<BuildSpec> specs) {
+  // This assumes the file contains 'steps:', which seems reasonable.
   var file = File(p.join(rootPath, '.github', 'workflows', 'presubmit.yaml'));
   var versions = [];
   for (var spec in specs) {
@@ -126,7 +118,17 @@ void genPresubmitYaml(List<BuildSpec> specs) {
       " and run './bin/plugin generate'.\n\n";
   var contents = header + templateContents;
   log('writing ${p.relative(file.path)}');
-  file.writeAsStringSync(contents, flush: true);
+  var templateIndex = contents.indexOf('steps:');
+  if (templateIndex < 0) {
+    log('presubmit template cannot be generated');
+    return false;
+  }
+  var fileContents = file.readAsStringSync();
+  var fileIndex = fileContents.indexOf('steps:');
+  var newContent =
+      contents.substring(0, templateIndex) + fileContents.substring(fileIndex);
+  file.writeAsStringSync(newContent, flush: true);
+  return true;
 }
 
 bool isTravisFileValid() {
@@ -150,16 +152,6 @@ Future<int> jar(String directory, String outFile) async {
       .map((f) => p.basename(f.path)));
   args.remove('.DS_Store');
   return await exec('jar', args, cwd: directory);
-}
-
-Future<int> moveToArtifacts(ProductCommand cmd, BuildSpec spec) async {
-  final dir = Directory(p.join(rootPath, 'artifacts'));
-  if (!dir.existsSync()) throw 'No artifacts directory found';
-  var file = pluginRegistryIds[spec.pluginId];
-  var args = <String>[];
-  args.add(p.join(rootPath, 'build', file));
-  args.add(cmd.releasesFilePath(spec));
-  return await exec('mv', args);
 }
 
 Future<bool> performReleaseChecks(ProductCommand cmd) async {
@@ -254,13 +246,6 @@ String substituteTemplateVariables(String line, BuildSpec spec) {
     }
   }
   return line;
-}
-
-Future<int> zip(String directory, String outFile) async {
-  var dest = p.absolute(outFile);
-  createDir(p.dirname(dest));
-  var args = ['-r', dest, p.basename(directory)];
-  return await exec('zip', args, cwd: p.dirname(directory));
 }
 
 void _copyFile(File file, Directory to, {String filename = ''}) {
@@ -570,7 +555,9 @@ class GenerateCommand extends ProductCommand {
     var json = readProductMatrix();
     var spec = SyntheticBuildSpec.fromJson(json.first, release, specs);
     await genPluginFiles(spec, 'resources');
-    genPresubmitYaml(specs);
+    if (!genPresubmitYaml(specs)) {
+      return 1;
+    }
     generateLiveTemplates();
     if (isReleaseMode) {
       if (!await performReleaseChecks(this)) {
@@ -718,6 +705,7 @@ abstract class ProductCommand extends Command {
   Future<int> run() async {
     await _initGlobals();
     await _initSpecs();
+    _handleSymlinksOnWindows();
     try {
       return await doit();
     } catch (ex, stack) {
@@ -750,6 +738,26 @@ abstract class ProductCommand extends Command {
       await specs[i].initChangeLog();
     }
     return specs.length;
+  }
+
+  void _handleSymlinksOnWindows() {
+    if (!Platform.isWindows) {
+      return;
+    }
+    const List<String> symlinks = [
+      r'flutter-idea\resources',
+      r'flutter-studio\resources',
+    ];
+    final currentPath = Directory.current.path;
+    for (final entityPath in symlinks) {
+      final path = '$currentPath\\$entityPath';
+      if (FileSystemEntity.isLinkSync(path)) {
+        continue;
+      }
+      final content = File(path).readAsStringSync();
+      File(path).deleteSync();
+      Link(path).createSync(content);
+    }
   }
 }
 

@@ -36,15 +36,20 @@ import com.intellij.testFramework.LightVirtualFile;
 import com.intellij.util.PlatformUtils;
 import com.jetbrains.lang.dart.DartFileType;
 import com.jetbrains.lang.dart.psi.DartFile;
+import io.flutter.jxbrowser.EmbeddedJxBrowser;
+import io.flutter.jxbrowser.JxBrowserStatus;
 import io.flutter.pub.PubRoot;
 import io.flutter.pub.PubRootCache;
 import io.flutter.settings.FlutterSettings;
 import io.flutter.utils.AndroidUtils;
 import io.flutter.utils.FlutterModuleUtils;
+import io.flutter.view.EmbeddedBrowser;
+import io.flutter.view.EmbeddedJcefBrowser;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.SystemIndependent;
 import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
 import org.yaml.snakeyaml.nodes.Tag;
@@ -620,5 +625,19 @@ public class FlutterUtils {
       }
     }
     return null;
+  }
+
+  @Nullable
+  public static EmbeddedBrowser embeddedBrowser(Project project) {
+    if (project == null || project.isDisposed()) {
+      return null;
+    }
+
+    return FlutterSettings.getInstance().isEnableJcefBrowser() ? EmbeddedJcefBrowser.getInstance(project) : EmbeddedJxBrowser.getInstance(project);
+  }
+
+  public static boolean embeddedBrowserAvailable(JxBrowserStatus status) {
+    return status.equals(JxBrowserStatus.INSTALLED) || status.equals(JxBrowserStatus.INSTALLATION_SKIPPED) && FlutterSettings.getInstance()
+      .isEnableJcefBrowser();
   }
 }

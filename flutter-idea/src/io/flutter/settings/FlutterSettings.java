@@ -8,11 +8,9 @@ package io.flutter.settings;
 import com.google.common.annotations.VisibleForTesting;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.components.ServiceManager;
-import com.intellij.openapi.util.SystemInfo;
 import com.intellij.openapi.util.registry.Registry;
 import com.intellij.util.EventDispatcher;
 import com.jetbrains.lang.dart.analyzer.DartClosingLabelManager;
-import io.flutter.FlutterMessages;
 import io.flutter.analytics.Analytics;
 
 import java.util.EventListener;
@@ -20,6 +18,7 @@ import java.util.EventListener;
 public class FlutterSettings {
   private static final String reloadOnSaveKey = "io.flutter.reloadOnSave";
   private static final String openInspectorOnAppLaunchKey = "io.flutter.openInspectorOnAppLaunch";
+  private static final String perserveLogsDuringHotReloadAndRestartKey = "io.flutter.persereLogsDuringHotReloadAndRestart";
   private static final String verboseLoggingKey = "io.flutter.verboseLogging";
   private static final String formatCodeOnSaveKey = "io.flutter.formatCodeOnSave";
   private static final String organizeImportsOnSaveKey = "io.flutter.organizeImportsOnSave";
@@ -32,6 +31,7 @@ public class FlutterSettings {
   private static final String enableEmbeddedBrowsersKey = "io.flutter.editor.enableEmbeddedBrowsers";
   private static final String enableBazelHotRestartKey = "io.flutter.editor.enableBazelHotRestart";
   private static final String showBazelHotRestartWarningKey = "io.flutter.showBazelHotRestartWarning";
+  private static final String enableJcefBrowserKey = "io.flutter.enableJcefBrowser";
   private static final String fontPackagesKey = "io.flutter.fontPackages";
   private static final String allowTestsInSourcesRootKey = "io.flutter.allowTestsInSources";
   private static final String showBazelIosRunNotificationKey = "io.flutter.hideBazelIosRunNotification";
@@ -90,6 +90,10 @@ public class FlutterSettings {
 
     if (isOpenInspectorOnAppLaunch()) {
       analytics.sendEvent("settings", afterLastPeriod(openInspectorOnAppLaunchKey));
+    }
+
+    if (isPerserveLogsDuringHotReloadAndRestart()) {
+      analytics.sendEvent("settings", afterLastPeriod(perserveLogsDuringHotReloadAndRestartKey));
     }
 
     if (isFormatCodeOnSave()) {
@@ -241,6 +245,15 @@ public class FlutterSettings {
     fireEvent();
   }
 
+  public boolean isPerserveLogsDuringHotReloadAndRestart() {
+    return getPropertiesComponent().getBoolean(perserveLogsDuringHotReloadAndRestartKey, false);
+  }
+
+  public void setPerserveLogsDuringHotReloadAndRestart(boolean value) {
+    getPropertiesComponent().setValue(perserveLogsDuringHotReloadAndRestartKey, value, false);
+    fireEvent();
+  }
+
   /**
    * Tells IntelliJ to show all run configurations possible when the user clicks on the left-hand green arrow to run a test.
    * <p>
@@ -253,6 +266,16 @@ public class FlutterSettings {
 
   public void setShowAllRunConfigurationsInContext(boolean value) {
     Registry.get(suggestAllRunConfigurationsFromContextKey).setValue(value);
+
+    fireEvent();
+  }
+
+  public boolean isEnableJcefBrowser() {
+    return getPropertiesComponent().getBoolean(enableJcefBrowserKey, false);
+  }
+
+  public void setEnableJcefBrowser(boolean value) {
+    getPropertiesComponent().setValue(enableJcefBrowserKey, value, false);
 
     fireEvent();
   }
@@ -319,28 +342,7 @@ public class FlutterSettings {
   }
 
   public boolean isEnableEmbeddedBrowsers() {
-    // For Big Sur users, change this setting to true if it's currently false and we haven't already set it to true.
-    if (SystemInfo.isMac && (SystemInfo.isOsVersionAtLeast("11.0") || SystemInfo.isOsVersionAtLeast("10.16")) &&
-            !getPropertiesComponent().getBoolean(enableEmbeddedBrowsersKey, true) &&
-            isChangeBigSurToTrue()) {
-      FlutterMessages.showInfo(
-              "Embedded DevTools Inspector",
-              "The embedded inspector is now supported for MacOS Big Sur and is enabled by default. To disable, go to Preferences > Flutter.",
-              null
-      );
-
-      // We do not want to set it back to true again in the future (e.g. if a user decides to set to false).
-      setChangeBigSurToTrue(false);
-      setEnableEmbeddedBrowsers(true);
-      return true;
-    }
-
-    return getPropertiesComponent().getBoolean(enableEmbeddedBrowsersKey, true);
-  }
-
-  public void setEnableEmbeddedBrowsers(boolean value) {
-    getPropertiesComponent().setValue(enableEmbeddedBrowsersKey, value, true);
-    fireEvent();
+    return true;
   }
 
   public boolean isEnableBazelHotRestart() {

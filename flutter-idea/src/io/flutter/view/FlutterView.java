@@ -17,6 +17,7 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.PersistentStateComponent;
 import com.intellij.openapi.components.Storage;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.editor.colors.EditorColorsListener;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.SimpleToolWindowPanel;
@@ -24,7 +25,6 @@ import com.intellij.openapi.ui.VerticalFlowLayout;
 import com.intellij.openapi.util.ActionCallback;
 import com.intellij.openapi.util.ActiveRunnable;
 import com.intellij.openapi.util.Disposer;
-import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.wm.IdeFocusManager;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
@@ -68,10 +68,7 @@ import io.flutter.toolwindow.FlutterViewToolWindowManagerListener;
 import io.flutter.utils.AsyncUtils;
 import io.flutter.utils.EventStream;
 import io.flutter.utils.JxBrowserUtils;
-import io.flutter.utils.VmServiceListenerAdapter;
 import io.flutter.vmService.ServiceExtensions;
-import org.dartlang.vm.service.VmService;
-import org.dartlang.vm.service.element.Event;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -139,7 +136,7 @@ public class FlutterView implements PersistentStateComponent<FlutterViewState>, 
 
   @VisibleForTesting
   @NonInjectable
-  protected FlutterView(@NotNull Project project, JxBrowserManager jxBrowserManager, JxBrowserUtils jxBrowserUtils, InspectorGroupManagerService inspectorGroupManagerService, MessageBusConnection messageBusConnection) {
+  protected FlutterView(@NotNull Project project, @NotNull JxBrowserManager jxBrowserManager, JxBrowserUtils jxBrowserUtils, InspectorGroupManagerService inspectorGroupManagerService, MessageBusConnection messageBusConnection) {
     myProject = project;
     this.jxBrowserUtils = jxBrowserUtils;
     this.jxBrowserManager = jxBrowserManager;
@@ -305,11 +302,11 @@ public class FlutterView implements PersistentStateComponent<FlutterViewState>, 
       });
 
       if (!busSubscribed) {
-        busConnection.subscribe(EditorColorsManager.TOPIC, scheme ->
+        busConnection.subscribe(EditorColorsManager.TOPIC, (EditorColorsListener)scheme ->
           embeddedBrowserOptional()
             .ifPresent(embeddedBrowser -> embeddedBrowser.updateColor(ColorUtil.toHex(UIUtil.getEditorPaneBackground())))
         );
-        busConnection.subscribe(UISettingsListener.TOPIC, scheme ->
+        busConnection.subscribe(UISettingsListener.TOPIC, (UISettingsListener)scheme ->
           embeddedBrowserOptional()
             .ifPresent(embeddedBrowser -> embeddedBrowser.updateFontSize(UIUtil.getFontSize(UIUtil.FontSize.NORMAL)))
         );
@@ -326,7 +323,10 @@ public class FlutterView implements PersistentStateComponent<FlutterViewState>, 
   }
 
   private Optional<EmbeddedBrowser> embeddedBrowserOptional() {
-    return myProject.isDisposed() ? Optional.empty() : Optional.of(EmbeddedBrowser.getInstance(myProject));
+    if (myProject.isDisposed()) {
+      return Optional.empty();
+    }
+    return Optional.ofNullable(FlutterUtils.embeddedBrowser(myProject));
   }
 
   private void addInspectorViewContent(FlutterApp app, @Nullable InspectorService inspectorService, ToolWindow toolWindow) {
@@ -705,7 +705,6 @@ public class FlutterView implements PersistentStateComponent<FlutterViewState>, 
       if (contentManager.isDisposed()) {
         return;
       }
-      contentManager.removeAllContents(true);
 
       final JPanel panel = new JPanel(new BorderLayout());
       panel.add(label, BorderLayout.CENTER);
@@ -742,90 +741,29 @@ public class FlutterView implements PersistentStateComponent<FlutterViewState>, 
 
     toolWindow.setIcon(ExecutionUtil.getLiveIndicator(FlutterIcons.Flutter_13));
 
-    if (FlutterSettings.getInstance().isEnableEmbeddedBrowsers()) {
-      if (jxBrowserManager.getStatus().equals(JxBrowserStatus.INSTALLED)) {
-        // Reset the URL since we may have an outdated one from a previous app run.
-        embeddedBrowserOptional().ifPresent(EmbeddedBrowser::resetUrl);
-      }
-      if (toolWindow.isVisible()) {
-        displayEmbeddedBrowser(app, inspectorService, toolWindow);
-      }
-      else {
-        if (toolWindowListener == null) {
-          toolWindowListener = new FlutterViewToolWindowManagerListener(myProject, toolWindow);
-        }
-        // If the window isn't visible yet, only executed embedded browser steps when it becomes visible.
-        toolWindowListener.updateOnWindowFirstVisible(() -> {
-          displayEmbeddedBrowser(app, inspectorService, toolWindow);
-        });
-      }
-
-      return;
+    if (toolWindow.isVisible()) {
+      displayEmbeddedBrowser(app, inspectorService, toolWindow);
     }
-
-    listenForRenderTreeActivations(toolWindow);
-
-    addInspectorViewContent(app, inspectorService, toolWindow);
-
-    app.getVmService().addVmServiceListener(new VmServiceListenerAdapter() {
-      @Override
-      public void connectionOpened() {
-        onAppChanged(app);
+    else {
+      if (toolWindowListener == null) {
+        toolWindowListener = new FlutterViewToolWindowManagerListener(myProject, toolWindow);
       }
-
-      @Override
-      public void received(String streamId, Event event) {
-        if (StringUtil.equals(streamId, VmService.EXTENSION_STREAM_ID)) {
-          if (StringUtil.equals("Flutter.Frame", event.getExtensionKind())) {
-            handleFlutterFrame(app);
-          }
-        }
-      }
-
-      @Override
-      public void connectionClosed() {
-        ApplicationManager.getApplication().invokeLater(() -> {
-          if (inspectorService != null) {
-            Disposer.dispose(inspectorService);
-          }
-
-          if (toolWindow.isDisposed()) return;
-          final ContentManager contentManager = toolWindow.getContentManager();
-          onAppChanged(app);
-          final PerAppState state = perAppViewState.remove(app);
-          if (state != null) {
-            if (state.content != null) {
-              contentManager.removeContent(state.content, true);
-            }
-            state.dispose();
-          }
-          if (perAppViewState.isEmpty()) {
-            // No more applications are running.
-            updateForEmptyContent(toolWindow);
-          }
-        });
-      }
-    });
-
-    onAppChanged(app);
-
-    app.addStateListener(new FlutterApp.FlutterAppListener() {
-      public void notifyAppRestarted() {
-        // When we get a restart finished event, queue up a notification to the flutter view
-        // actions. We don't notify right away because the new isolate can take a little
-        // while to start up. We wait until we get the first frame event, which is
-        // enough of an indication that the isolate and flutter framework are initialized
-        // to where they can receive service calls (for example, calls to restore various
-        // framework debugging settings).
-        final PerAppState state = getStateForApp(app);
-        if (state != null) {
-          state.sendRestartNotificationOnNextFrame = true;
-        }
-      }
-    });
+      // If the window isn't visible yet, only executed embedded browser steps when it becomes visible.
+      toolWindowListener.updateOnWindowFirstVisible(() -> {
+        displayEmbeddedBrowser(app, inspectorService, toolWindow);
+      });
+    }
   }
 
   private void displayEmbeddedBrowser(FlutterApp app, InspectorService inspectorService, ToolWindow toolWindow) {
+    if (FlutterSettings.getInstance().isEnableJcefBrowser()) {
+      presentDevTools(app, inspectorService, toolWindow, true);
+    } else {
+      displayEmbeddedBrowserIfJxBrowser(app, inspectorService, toolWindow);
+    }
+  }
+
+  private void displayEmbeddedBrowserIfJxBrowser(FlutterApp app, InspectorService inspectorService, ToolWindow toolWindow) {
     final JxBrowserManager manager = jxBrowserManager;
     final JxBrowserStatus jxBrowserStatus = manager.getStatus();
 
@@ -837,7 +775,7 @@ public class FlutterView implements PersistentStateComponent<FlutterViewState>, 
     }
     else if (jxBrowserStatus.equals(JxBrowserStatus.INSTALLATION_FAILED)) {
       handleJxBrowserInstallationFailed(app, inspectorService, toolWindow);
-    } else if (jxBrowserStatus.equals(JxBrowserStatus.NOT_INSTALLED)) {
+    } else if (jxBrowserStatus.equals(JxBrowserStatus.NOT_INSTALLED) || jxBrowserStatus.equals(JxBrowserStatus.INSTALLATION_SKIPPED)) {
       manager.setUp(myProject);
       handleJxBrowserInstallationInProgress(app, inspectorService, toolWindow);
     }
